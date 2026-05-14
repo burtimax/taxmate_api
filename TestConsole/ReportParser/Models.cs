@@ -8,8 +8,8 @@ public sealed class ReportDocument
     public string? Client { get; set; }
     public string? Agreement { get; set; }
 
-    public BalanceBlock? ConsolidatedCashFlow { get; set; }
-    public BalanceBlock? CashFlow { get; set; }
+    public List<BalanceBlock> ConsolidatedCashFlow { get; set; } = new();
+    public List<BalanceBlock> CashFlow { get; set; } = new();
 
     public List<TransferTransaction> Transfers { get; set; } = new();
     public List<Trade> Trades { get; set; } = new();

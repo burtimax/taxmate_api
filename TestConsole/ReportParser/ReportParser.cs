@@ -33,6 +33,11 @@ public sealed class ReportParser
     private static readonly Regex UnderlyingInMatrixRegex =
         new(@"(?<ticker>[A-Z_]+)\s+\((?<isin>[A-Z0-9]+)\)", RegexOptions.Compiled);
 
+    private static readonly Regex CashFlowTableRowRegex =
+        new(
+            @"^(?<location>.+)\s+(?<incoming>\d[\d ]*(?:\.\d+)?)\s+(?<credit>\d[\d ]*(?:\.\d+)?)\s+(?<debit>\d[\d ]*(?:\.\d+)?)\s+(?<outgoing>\d[\d ]*(?:\.\d+)?)\s+(?<currency>[A-Z]{3})\s*$",
+            RegexOptions.Compiled);
+
     public ReportDocument Parse(string pdfPath)
     {
         var rawText = ExtractText(pdfPath);
@@ -46,8 +51,8 @@ public sealed class ReportParser
         };
 
         ParseHeader(text, report);
-        report.ConsolidatedCashFlow = ParseBalanceBlock(Between(text, "CONSOLIDATED CASH FLOW", "1. CASH FLOW"));
-        report.CashFlow = ParseBalanceBlock(Between(text, "1. CASH FLOW", "2. TRANSACTIONS"));
+        report.ConsolidatedCashFlow = ParseCashFlowTable(Between(text, "CONSOLIDATED CASH FLOW", "1. CASH FLOW"));
+        report.CashFlow = ParseCashFlowTable(Between(text, "1. CASH FLOW", "2. TRANSACTIONS"));
         report.Transfers = ParseTransfers(Between(text, "2. TRANSACTIONS", "3. TRADES / REPO TRADES / FUNDS PLACEMENT"));
         report.Trades = ParseTradesSection(Between(text, "3. TRADES / REPO TRADES / FUNDS PLACEMENT", "4. OUTSTANDING POSITION"));
         report.OutstandingPositions = MergeOutstanding(ParseOutstandingSection(Between(text, "4. OUTSTANDING POSITION", "5. OTC EQUITY DERIVATIVES TRANSACTION DETAILS")));
@@ -137,29 +142,45 @@ public sealed class ReportParser
         if (agreement.Success) report.Agreement = agreement.Groups["value"].Value.Trim();
     }
 
-    private static BalanceBlock? ParseBalanceBlock(string sectionText)
+    private static List<BalanceBlock> ParseCashFlowTable(string sectionText)
     {
-        var line = sectionText
-            .Split('\n')
-            .Select(NormalizeLine)
-            .FirstOrDefault(x => x.StartsWith("CLIENT MONEY ACCOUNT CASH", StringComparison.OrdinalIgnoreCase));
+        var list = new List<BalanceBlock>();
 
-        if (line is null) return null;
-
-        var m = Regex.Match(line,
-            @"^(?<location>CLIENT MONEY ACCOUNT CASH \(USD\))\s+(?<incoming>\d[\d ]*(?:\.\d+)?)\s+(?<credit>\d[\d ]*(?:\.\d+)?)\s+(?<debit>\d[\d ]*(?:\.\d+)?)\s+(?<outgoing>\d[\d ]*(?:\.\d+)?)\s+(?<currency>[A-Z]{3})$");
-
-        if (!m.Success) return null;
-
-        return new BalanceBlock
+        foreach (var line in sectionText.Split('\n').Select(NormalizeLine))
         {
-            Location = m.Groups["location"].Value,
-            IncomingBalance = ParseDecimal(m.Groups["incoming"].Value),
-            Credit = ParseDecimal(m.Groups["credit"].Value),
-            Debit = ParseDecimal(m.Groups["debit"].Value),
-            OutgoingBalance = ParseDecimal(m.Groups["outgoing"].Value),
-            Currency = m.Groups["currency"].Value
-        };
+            if (string.IsNullOrWhiteSpace(line))
+                continue;
+
+            if (line.StartsWith("Location ", StringComparison.OrdinalIgnoreCase) &&
+                line.Contains("Incoming balance", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (line.StartsWith("Client money account number:", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (Regex.IsMatch(line, @"^\d{2}\.\d{2}\.\d{4}\b"))
+                continue;
+
+            var m = CashFlowTableRowRegex.Match(line);
+            if (!m.Success)
+                continue;
+
+            var location = m.Groups["location"].Value.Trim();
+            if (string.IsNullOrEmpty(location))
+                continue;
+
+            list.Add(new BalanceBlock
+            {
+                Location = location,
+                IncomingBalance = ParseDecimal(m.Groups["incoming"].Value),
+                Credit = ParseDecimal(m.Groups["credit"].Value),
+                Debit = ParseDecimal(m.Groups["debit"].Value),
+                OutgoingBalance = ParseDecimal(m.Groups["outgoing"].Value),
+                Currency = m.Groups["currency"].Value
+            });
+        }
+
+        return list;
     }
 
     private static List<TransferTransaction> ParseTransfers(string sectionText)
