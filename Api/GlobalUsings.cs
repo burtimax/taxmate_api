@@ -1,1 +1,0 @@
-﻿global using static Api.Resources.Localization.Strings;
